@@ -4,6 +4,7 @@
   "ezbookkeeping_username": "your_username",
   "ezbookkeeping_working_directory": null,
   "timezone": "America/Los_Angeles",
+  "date_only_time": "00:00:00",
   "lookback_days": 7,
   "overlap_days": 5,
   "include_pending": false,

@@ -269,6 +269,65 @@ def resolve_timezone(name: str | None):
         return datetime.now().astimezone().tzinfo or timezone.utc
 
 
+def parse_hhmmss(value: str) -> tuple[int, int, int]:
+    parts = value.strip().split(":")
+    if len(parts) != 3:
+        raise ValueError(f"Expected HH:MM:SS, got {value!r}")
+    hour, minute, second = (int(parts[0]), int(parts[1]), int(parts[2]))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+        raise ValueError(f"Invalid time of day: {value!r}")
+    return hour, minute, second
+
+
+def is_date_only_timestamp(utc_dt: datetime) -> bool:
+    """
+    Banks via SimpleFIN often send date-only posts at a fixed UTC anchor
+    (commonly 00:00 or 12:00 UTC). Noon UTC becomes 05:00 in PDT.
+    """
+    return (
+        utc_dt.minute == 0
+        and utc_dt.second == 0
+        and utc_dt.microsecond == 0
+        and utc_dt.hour in (0, 12)
+    )
+
+
+def resolve_transaction_datetime(
+    txn: dict[str, Any],
+    tzinfo,
+    *,
+    date_only_time: str = "00:00:00",
+    prefer_transacted_at: bool = True,
+) -> datetime:
+    """
+    Build the local datetime written to the ezBookkeeping CSV.
+
+    Prefer transacted_at when present. For date-only posted stamps, keep the
+    local calendar date and replace the clock with date_only_time.
+    """
+    posted = int(txn.get("posted") or 0)
+    transacted_at = int(txn.get("transacted_at") or 0)
+    if prefer_transacted_at and transacted_at > 0:
+        epoch = transacted_at
+    elif posted > 0:
+        epoch = posted
+    else:
+        raise ValueError("transaction missing posted/transacted_at timestamp")
+
+    utc_dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+    local_dt = utc_dt.astimezone(tzinfo)
+
+    # Only normalize the SimpleFIN posted date-only pattern. If we used a real
+    # transacted_at that happens to land on 00:00/12:00 UTC, still normalize —
+    # bank "times" from SimpleFIN are rarely meaningful wall-clock times.
+    if is_date_only_timestamp(utc_dt):
+        hour, minute, second = parse_hhmmss(date_only_time)
+        local_dt = local_dt.replace(
+            hour=hour, minute=minute, second=second, microsecond=0
+        )
+    return local_dt
+
+
 def build_csv_rows(
     accounts_payload: dict[str, Any],
     account_map: dict[str, str],
@@ -279,6 +338,7 @@ def build_csv_rows(
     default_income_parent: str,
     tzinfo,
     skip_pending: bool,
+    date_only_time: str = "00:00:00",
 ) -> tuple[list[dict[str, str]], list[str]]:
     rows: list[dict[str, str]] = []
     new_keys: list[str] = []
@@ -326,12 +386,14 @@ def build_csv_rows(
                 continue
 
             txn_type, abs_amount = classify_transaction(amount)
-            posted = int(txn.get("posted") or 0)
-            if posted <= 0:
+            try:
+                when = resolve_transaction_datetime(
+                    txn, tzinfo, date_only_time=date_only_time
+                )
+            except ValueError:
                 logging.warning("Skipping txn %s with missing posted timestamp", key)
                 continue
 
-            when = datetime.fromtimestamp(posted, tz=timezone.utc).astimezone(tzinfo)
             if txn_type == "Expense":
                 parent = default_expense_parent
                 sub = default_expense_category
@@ -506,6 +568,7 @@ def run_sync(args: argparse.Namespace) -> int:
         default_income_parent=config.get("default_income_parent", ""),
         tzinfo=tzinfo,
         skip_pending=not include_pending,
+        date_only_time=str(config.get("date_only_time", "00:00:00")),
     )
 
     if not rows:
