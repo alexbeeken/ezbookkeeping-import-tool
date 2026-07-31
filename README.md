@@ -30,7 +30,33 @@ python3 simplefin_sync.py --claim-token 'PASTE_SETUP_TOKEN_HERE'
 
 Copy the printed Access URL into `config.json` as `simplefin_access_url`. Treat it like a password — it embeds Basic Auth credentials. Setup Tokens are single-use.
 
-### 2. Map accounts
+### 2. Find your ezBookkeeping username
+
+`config.json` needs `ezbookkeeping_username` — that is the **login username**, not the numeric `[Uid]`.
+
+Ways to find it:
+
+- **Web UI:** use the username you sign in with (User Settings / Profile also shows it).
+- **CLI:** if you already know the username, confirm it (and see the numeric Uid) with:
+
+```bash
+ezbookkeeping userdata user-get --username YOUR_USERNAME
+```
+
+Example output includes:
+
+```text
+[Uid] 1234567890
+[Username] alice
+[Email] alice@example.com
+...
+```
+
+Put `alice` (the `[Username]` value) into `ezbookkeeping_username`. If you sync into two ezBookkeeping users, use a separate `config.json` per username (each with its own `state_file`).
+
+There is no `user-list` CLI command — you look up users by username.
+
+### 3. Map accounts
 
 List SimpleFIN account IDs:
 
@@ -47,7 +73,7 @@ Edit `config.json` `account_map` so each SimpleFIN id points at an **existing** 
 }
 ```
 
-### 3. Categories
+### 4. Categories
 
 Create income/expense categories in ezBookkeeping first. Then set:
 
@@ -57,7 +83,7 @@ Create income/expense categories in ezBookkeeping first. Then set:
 | `default_income_category` | Sub Category name for inflows (required to exist) |
 | `default_expense_parent` / `default_income_parent` | Optional parent Category names |
 
-### 4. Dry run, then live import
+### 5. Dry run, then live import
 
 ```bash
 python3 simplefin_sync.py --dry-run
@@ -86,7 +112,7 @@ Run the job as the same OS user that can execute the ezBookkeeping CLI against y
 2. Fetch window = `lookback_days` + `overlap_days` (default 7+5; capped at 90). Overlap follows SimpleFIN’s recommendation so late-posted transactions are not missed
 3. Positive SimpleFIN amounts → **Income**; negative → **Expense**. Amounts are written without thousands separators
 4. CSV uses the native `ezbookkeeping_csv` columns (`Time`, `Type`, `Sub Category`, `Account`, `Amount`, …)
-5. `ezbookkeeping transaction-import --username … --file … --type ezbookkeeping_csv`
+5. `ezbookkeeping userdata transaction-import --username … --file … --type ezbookkeeping_csv`
 6. Imported SimpleFIN transaction IDs are stored in `sync_state.json` so overlapping windows do not create duplicates
 7. Errors go to stdout and `bridge_error.log`
 
@@ -96,7 +122,7 @@ Run the job as the same OS user that can execute the ezBookkeeping CLI against y
 |---|---|
 | `simplefin_access_url` | Claimed Access URL (`https://user:pass@host/…`) |
 | `ezbookkeeping_cli` | CLI binary name or absolute path (default `ezbookkeeping`) |
-| `ezbookkeeping_username` | Target ezBookkeeping username |
+| `ezbookkeeping_username` | Target ezBookkeeping **login username** (not numeric Uid; see setup step 2) |
 | `ezbookkeeping_working_directory` | Optional cwd for the CLI process |
 | `timezone` | IANA timezone for CSV timestamps (e.g. `America/Los_Angeles`) |
 | `lookback_days` / `overlap_days` | Fetch window pieces |

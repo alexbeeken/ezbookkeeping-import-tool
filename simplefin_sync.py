@@ -389,6 +389,7 @@ def import_via_cli(
 ) -> None:
     cmd = [
         cli_path,
+        "userdata",
         "transaction-import",
         "--username",
         username,
