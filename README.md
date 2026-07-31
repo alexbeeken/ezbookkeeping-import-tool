@@ -129,7 +129,7 @@ Run the job as the same OS user that can execute the ezBookkeeping CLI against y
 
 1. `GET {ACCESS_URL}/accounts?version=2&start-date=…` with embedded Basic Auth
 2. Fetch window = `lookback_days` + `overlap_days` (default 7+5; capped at 90). Overlap follows SimpleFIN’s recommendation so late-posted transactions are not missed
-3. Positive SimpleFIN amounts → **Income**; negative → **Expense**. Amounts are written without thousands separators
+3. Amount signs → Income/Expense via `positive_is_income` (default: positive → Expense). Amounts are written without thousands separators
 4. Date-only SimpleFIN `posted` stamps (common `00:00` / `12:00` UTC) keep the local calendar day and use `date_only_time` (default midnight) instead of e.g. 5:00 AM PDT
 5. CSV uses the native `ezbookkeeping_csv` columns (`Time`, `Type`, `Sub Category`, `Account`, `Amount`, …)
 6. `ezbookkeeping userdata transaction-import --username … --file … --type ezbookkeeping_csv`
@@ -146,6 +146,7 @@ Run the job as the same OS user that can execute the ezBookkeeping CLI against y
 | `ezbookkeeping_working_directory` | Optional cwd for the CLI process |
 | `timezone` | IANA timezone for CSV timestamps (e.g. `America/Los_Angeles`) |
 | `date_only_time` | Clock used when SimpleFIN only provides a date (`00:00`/`12:00` UTC anchors); default `00:00:00` local |
+| `positive_is_income` | If `true`, SimpleFIN positive amounts → Income (protocol). Default `false` (positive → Expense) matches common Bridge feeds |
 | `lookback_days` / `overlap_days` | Fetch window pieces |
 | `include_pending` | Include pending SimpleFIN transactions |
 | `account_map` | SimpleFIN account id → ezBookkeeping account **name** |

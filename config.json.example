@@ -5,6 +5,7 @@
   "ezbookkeeping_working_directory": null,
   "timezone": "America/Los_Angeles",
   "date_only_time": "00:00:00",
+  "positive_is_income": false,
   "lookback_days": 7,
   "overlap_days": 5,
   "include_pending": false,

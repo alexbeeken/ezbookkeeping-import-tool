@@ -235,14 +235,20 @@ def format_amount(value: Decimal) -> str:
 
 def classify_transaction(
     amount: Decimal,
+    *,
+    positive_is_income: bool = False,
 ) -> tuple[str, Decimal]:
     """
-    SimpleFIN: positive = money in (Income), negative = money out (Expense).
-    ezBookkeeping Amount is absolute; Type carries direction.
+    Map a SimpleFIN amount to ezBookkeeping Type + absolute Amount.
+
+    The SimpleFIN protocol says positive = money deposited. Some Bridge
+    institution feeds are reversed in practice; default is positive → Expense.
+    Set positive_is_income true in config to follow the protocol literally.
     """
-    if amount < 0:
-        return "Expense", abs(amount)
-    return "Income", abs(amount)
+    money_in = amount > 0 if positive_is_income else amount < 0
+    if money_in:
+        return "Income", abs(amount)
+    return "Expense", abs(amount)
 
 
 def timezone_offset_string(dt: datetime) -> str:
@@ -339,6 +345,7 @@ def build_csv_rows(
     tzinfo,
     skip_pending: bool,
     date_only_time: str = "00:00:00",
+    positive_is_income: bool = False,
 ) -> tuple[list[dict[str, str]], list[str]]:
     rows: list[dict[str, str]] = []
     new_keys: list[str] = []
@@ -385,7 +392,9 @@ def build_csv_rows(
                 logging.debug("Skipping zero-amount txn %s", key)
                 continue
 
-            txn_type, abs_amount = classify_transaction(amount)
+            txn_type, abs_amount = classify_transaction(
+                amount, positive_is_income=positive_is_income
+            )
             try:
                 when = resolve_transaction_datetime(
                     txn, tzinfo, date_only_time=date_only_time
@@ -569,6 +578,7 @@ def run_sync(args: argparse.Namespace) -> int:
         tzinfo=tzinfo,
         skip_pending=not include_pending,
         date_only_time=str(config.get("date_only_time", "00:00:00")),
+        positive_is_income=bool(config.get("positive_is_income", False)),
     )
 
     if not rows:
