@@ -75,13 +75,32 @@ Edit `config.json` `account_map` so each SimpleFIN id points at an **existing** 
 
 ### 4. Categories
 
-Create income/expense categories in ezBookkeeping first. Then set:
+ezBookkeeping uses a **two-level** category tree. Transactions must use a **secondary** category (the leaf). A primary-only category named `Uncategorized` will **not** match — the CLI will still say it “needs to be created.”
+
+Create categories like this in **Transaction Categories**:
+
+1. Add a **primary** expense category (e.g. `Misc` or `Imported`).
+2. Under it, add a **secondary** expense category named exactly what you put in config (default: `Uncategorized`).
+3. Repeat for **income** (primary + secondary). Income and expense are separate type trees — an expense `Uncategorized` does not cover income transactions.
+
+Then set config to the **secondary** name (and optionally the primary):
 
 | Config key | Purpose |
 |---|---|
-| `default_expense_category` | Sub Category name for outflows (required to exist) |
-| `default_income_category` | Sub Category name for inflows (required to exist) |
-| `default_expense_parent` / `default_income_parent` | Optional parent Category names |
+| `default_expense_category` | Secondary expense name (must exist) |
+| `default_income_category` | Secondary income name (must exist) |
+| `default_expense_parent` / `default_income_parent` | Optional primary names (CSV `Category` column) |
+
+Example:
+
+```json
+"default_expense_parent": "Misc",
+"default_expense_category": "Uncategorized",
+"default_income_parent": "Misc",
+"default_income_category": "Uncategorized"
+```
+
+In the generated CSV, `Sub Category` is the secondary name; `Category` is the primary. Names must match exactly (spelling/spacing), and the secondary must not be hidden.
 
 ### 5. Dry run, then live import
 

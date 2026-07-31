@@ -8,9 +8,9 @@
   "overlap_days": 5,
   "include_pending": false,
   "request_timeout_seconds": 60,
-  "default_expense_parent": "",
+  "default_expense_parent": "Misc",
   "default_expense_category": "Uncategorized",
-  "default_income_parent": "",
+  "default_income_parent": "Misc",
   "default_income_category": "Uncategorized",
   "account_map": {
     "SIMPLEFIN_ACCOUNT_ID": "ezBookkeeping Account Name"
