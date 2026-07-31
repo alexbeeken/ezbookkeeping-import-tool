@@ -1,0 +1,22 @@
+{
+  "simplefin_access_url": "https://USERNAME:PASSWORD@bridge.simplefin.org/simplefin",
+  "ezbookkeeping_cli": "ezbookkeeping",
+  "ezbookkeeping_username": "your_username",
+  "ezbookkeeping_working_directory": null,
+  "timezone": "America/Los_Angeles",
+  "lookback_days": 7,
+  "overlap_days": 5,
+  "include_pending": false,
+  "request_timeout_seconds": 60,
+  "default_expense_parent": "",
+  "default_expense_category": "Uncategorized",
+  "default_income_parent": "",
+  "default_income_category": "Uncategorized",
+  "account_map": {
+    "SIMPLEFIN_ACCOUNT_ID": "ezBookkeeping Account Name"
+  },
+  "state_file": "sync_state.json",
+  "error_log": "bridge_error.log",
+  "keep_csv_path": null,
+  "max_seen_ids": 5000
+}

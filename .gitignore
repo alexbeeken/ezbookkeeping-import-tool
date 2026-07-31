@@ -1,0 +1,11 @@
+config.json
+sync_state.json
+bridge_error.log
+dry_run_import.csv
+*.csv
+!config.json.example
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
