@@ -8,7 +8,7 @@
   "positive_is_income": false,
   "lookback_days": 7,
   "overlap_days": 5,
-  "include_pending": false,
+  "include_pending": true,
   "request_timeout_seconds": 60,
   "default_expense_parent": "Misc",
   "default_expense_category": "Uncategorized",

@@ -346,26 +346,38 @@ def build_csv_rows(
     skip_pending: bool,
     date_only_time: str = "00:00:00",
     positive_is_income: bool = False,
-) -> tuple[list[dict[str, str]], list[str]]:
+) -> tuple[list[dict[str, str]], list[str], dict[str, int]]:
     rows: list[dict[str, str]] = []
     new_keys: list[str] = []
-    skipped_unmapped = 0
+    stats = {
+        "accounts_mapped": 0,
+        "accounts_unmapped_with_txns": 0,
+        "txns_fetched": 0,
+        "txns_already_seen": 0,
+        "txns_pending_skipped": 0,
+        "txns_zero_skipped": 0,
+        "txns_bad_skipped": 0,
+        "txns_new": 0,
+    }
 
     for account in accounts_payload.get("accounts") or []:
         sf_id = str(account.get("id") or "")
         if not sf_id:
             continue
         ez_account = account_map.get(sf_id)
+        account_txns = account.get("transactions") or []
         if not ez_account:
-            if account.get("transactions"):
-                skipped_unmapped += 1
+            if account_txns:
+                stats["accounts_unmapped_with_txns"] += 1
                 logging.warning(
-                    "Skipping SimpleFIN account id=%s name=%r (not in account_map)",
+                    "Skipping SimpleFIN account id=%s name=%r (%d txn(s); not in account_map)",
                     sf_id,
                     account.get("name"),
+                    len(account_txns),
                 )
             continue
 
+        stats["accounts_mapped"] += 1
         currency = str(account.get("currency") or "")
         # Skip custom-currency URLs; ezBookkeeping expects ISO codes.
         if currency.startswith("http"):
@@ -375,20 +387,25 @@ def build_csv_rows(
             )
             currency = ""
 
-        for txn in account.get("transactions") or []:
+        for txn in account_txns:
+            stats["txns_fetched"] += 1
             if skip_pending and txn.get("pending"):
+                stats["txns_pending_skipped"] += 1
                 continue
             key = txn_key(sf_id, txn)
             if key in seen:
+                stats["txns_already_seen"] += 1
                 continue
 
             try:
                 amount = Decimal(str(txn.get("amount", "0")))
             except InvalidOperation:
+                stats["txns_bad_skipped"] += 1
                 logging.error("Bad amount on txn %s: %r", key, txn.get("amount"))
                 continue
 
             if amount == 0:
+                stats["txns_zero_skipped"] += 1
                 logging.debug("Skipping zero-amount txn %s", key)
                 continue
 
@@ -400,6 +417,7 @@ def build_csv_rows(
                     txn, tzinfo, date_only_time=date_only_time
                 )
             except ValueError:
+                stats["txns_bad_skipped"] += 1
                 logging.warning("Skipping txn %s with missing posted timestamp", key)
                 continue
 
@@ -436,13 +454,49 @@ def build_csv_rows(
                 }
             )
             new_keys.append(key)
+            stats["txns_new"] += 1
 
-    if skipped_unmapped:
+    if stats["accounts_unmapped_with_txns"]:
         logging.warning(
             "%d SimpleFIN account(s) had transactions but no account_map entry",
-            skipped_unmapped,
+            stats["accounts_unmapped_with_txns"],
         )
-    return rows, new_keys
+    return rows, new_keys, stats
+
+
+def log_fetch_stats(stats: dict[str, int], seen_count: int) -> None:
+    logging.info(
+        "Fetch summary: mapped_accounts=%d fetched=%d new=%d already_seen=%d "
+        "pending_skipped=%d zero_skipped=%d bad_skipped=%d unmapped_accounts=%d "
+        "(dedup_state_size=%d)",
+        stats["accounts_mapped"],
+        stats["txns_fetched"],
+        stats["txns_new"],
+        stats["txns_already_seen"],
+        stats["txns_pending_skipped"],
+        stats["txns_zero_skipped"],
+        stats["txns_bad_skipped"],
+        stats["accounts_unmapped_with_txns"],
+        seen_count,
+    )
+    if stats["txns_fetched"] == 0:
+        logging.warning(
+            "SimpleFIN returned 0 transactions in this window for mapped accounts. "
+            "The bank feed may not have refreshed yet (often daily), or the "
+            "connection needs re-auth in SimpleFIN Bridge."
+        )
+    elif stats["txns_new"] == 0 and stats["txns_already_seen"] > 0:
+        logging.info(
+            "All fetched transactions are already in sync_state.json. "
+            "If you deleted them in ezBookkeeping and want to re-import, remove "
+            "those ids from sync_state.json (or delete the file). If you made "
+            "new purchases that are still pending, set include_pending to true."
+        )
+    elif stats["txns_new"] == 0 and stats["txns_pending_skipped"] > 0:
+        logging.warning(
+            "Only pending transactions were found and include_pending is false. "
+            "Set \"include_pending\": true in config.json to import them."
+        )
 
 
 def write_csv(path: str, rows: list[dict[str, str]]) -> None:
@@ -567,7 +621,7 @@ def run_sync(args: argparse.Namespace) -> int:
     )
 
     tzinfo = resolve_timezone(config.get("timezone"))
-    rows, new_keys = build_csv_rows(
+    rows, new_keys, stats = build_csv_rows(
         accounts_payload=payload,
         account_map={str(k): str(v) for k, v in config["account_map"].items()},
         seen=seen,
@@ -580,10 +634,12 @@ def run_sync(args: argparse.Namespace) -> int:
         date_only_time=str(config.get("date_only_time", "00:00:00")),
         positive_is_income=bool(config.get("positive_is_income", False)),
     )
+    log_fetch_stats(stats, seen_count=len(seen))
 
     if not rows:
         logging.info("No new transactions to import.")
         state["last_run"] = end.isoformat()
+        state["last_fetch_stats"] = stats
         save_json(state_path, state)
         return 0
 

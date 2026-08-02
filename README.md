@@ -148,7 +148,7 @@ Run the job as the same OS user that can execute the ezBookkeeping CLI against y
 | `date_only_time` | Clock used when SimpleFIN only provides a date (`00:00`/`12:00` UTC anchors); default `00:00:00` local |
 | `positive_is_income` | If `true`, SimpleFIN positive amounts → Income (protocol). Default `false` (positive → Expense) matches common Bridge feeds |
 | `lookback_days` / `overlap_days` | Fetch window pieces |
-| `include_pending` | Include pending SimpleFIN transactions |
+| `include_pending` | Include pending SimpleFIN transactions (default `true` in example; set `true` if card purchases never appear) |
 | `account_map` | SimpleFIN account id → ezBookkeeping account **name** |
 | `state_file` / `error_log` | Paths relative to the script directory if not absolute |
 | `keep_csv_path` | If set, leave the generated CSV at this path |
