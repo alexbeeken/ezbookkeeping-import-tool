@@ -15,6 +15,8 @@ import csv
 import json
 import logging
 import os
+import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -28,6 +30,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 DEFAULT_STATE_PATH = os.path.join(SCRIPT_DIR, "sync_state.json")
 DEFAULT_ERROR_LOG = os.path.join(SCRIPT_DIR, "bridge_error.log")
+SF_TAG_RE = re.compile(r"\[sf:([^\]]+)\]")
 
 # Official ezbookkeeping_csv headers (CLI --type ezbookkeeping_csv).
 CSV_HEADERS = [
@@ -224,6 +227,72 @@ def txn_key(account_id: str, txn: dict[str, Any]) -> str:
     return f"{account_id}:{txn_id}"
 
 
+def simplefin_txn_id(txn: dict[str, Any]) -> str:
+    return str(txn.get("id") or "")
+
+
+def extract_sf_id_from_comment(comment: str) -> str | None:
+    match = SF_TAG_RE.search(comment or "")
+    return match.group(1) if match else None
+
+
+def bare_sf_ids_from_keys(keys: set[str]) -> set[str]:
+    """Derive SimpleFIN txn ids from accountId:txnId state keys."""
+    bare: set[str] = set()
+    for key in keys:
+        if ":" in key:
+            bare.add(key.split(":", 1)[1])
+        elif key:
+            bare.add(key)
+    return bare
+
+
+def load_sf_ids_from_db(db_path: str) -> set[str]:
+    """
+    Read [sf:…] tags already present in ezBookkeeping comments.
+    Returns bare SimpleFIN transaction ids (not account-prefixed).
+    """
+    if not db_path:
+        return set()
+    if not os.path.exists(db_path):
+        logging.warning("ezbookkeeping_db not found at %s", db_path)
+        return set()
+
+    found: set[str] = set()
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        logging.warning("Could not open ezBookkeeping DB %s: %s", db_path, exc)
+        return set()
+    try:
+        rows = conn.execute(
+            'SELECT comment FROM "transaction" '
+            'WHERE deleted=0 AND comment LIKE "%[sf:%"'
+        )
+        for (comment,) in rows:
+            sf_id = extract_sf_id_from_comment(comment or "")
+            if sf_id:
+                found.add(sf_id)
+    finally:
+        conn.close()
+    logging.info(
+        "Loaded %d SimpleFIN id(s) already present in ezBookkeeping DB", len(found)
+    )
+    return found
+
+
+def build_seen_sets(
+    state_keys: set[str], db_sf_ids: set[str]
+) -> tuple[set[str], set[str]]:
+    """
+    Returns (full_keys, bare_sf_ids) used for dedup.
+    full_keys keep accountId:txnId from state; bare_sf_ids union state + DB.
+    """
+    full_keys = set(state_keys)
+    bare = bare_sf_ids_from_keys(full_keys) | set(db_sf_ids)
+    return full_keys, bare
+
+
 def format_amount(value: Decimal) -> str:
     """Format amount without thousands separators; keep up to 2 decimal places."""
     quantized = value.quantize(Decimal("0.01"))
@@ -337,7 +406,8 @@ def resolve_transaction_datetime(
 def build_csv_rows(
     accounts_payload: dict[str, Any],
     account_map: dict[str, str],
-    seen: set[str],
+    seen_keys: set[str],
+    seen_sf_ids: set[str],
     default_expense_category: str,
     default_income_category: str,
     default_expense_parent: str,
@@ -393,7 +463,8 @@ def build_csv_rows(
                 stats["txns_pending_skipped"] += 1
                 continue
             key = txn_key(sf_id, txn)
-            if key in seen:
+            sf_txn = simplefin_txn_id(txn)
+            if key in seen_keys or (sf_txn and sf_txn in seen_sf_ids):
                 stats["txns_already_seen"] += 1
                 continue
 
@@ -429,11 +500,10 @@ def build_csv_rows(
                 sub = default_income_category
 
             description = str(txn.get("description") or "").replace("\n", " ").strip()
-            # Keep SimpleFIN id in description for debugging / manual dedup.
-            if description:
-                description = f"{description} [sf:{txn.get('id')}]"
-            else:
-                description = f"[sf:{txn.get('id')}]"
+            # Put [sf:…] first so a naive CSV split on commas still keeps the id
+            # (ezBookkeeping CLI has truncated quoted descriptions at commas before).
+            sf_marker = f"[sf:{txn.get('id')}]"
+            description = f"{sf_marker} {description}".strip() if description else sf_marker
 
             rows.append(
                 {
@@ -549,13 +619,57 @@ def import_via_cli(
 
 
 def prune_seen(seen: set[str], keep: set[str], max_entries: int) -> set[str]:
-    """Keep newly imported keys plus a capped remainder of prior keys."""
+    """
+    Optionally cap the dedup set size.
+
+    max_entries <= 0 means unlimited (preferred for daily sync idempotency).
+    When capping, always retain `keep` (usually newly imported keys) first.
+    """
+    if max_entries <= 0 or len(seen) + len(keep) <= max_entries:
+        return set(seen) | set(keep)
+
     retained = set(keep)
-    for key in seen:
+    # Prefer keys that look like accountId:txnId with UUID-ish ids (stable order).
+    for key in sorted(seen):
         if len(retained) >= max_entries:
             break
         retained.add(key)
+    logging.warning(
+        "Dedup state pruned to %d entries (max_seen_ids=%d). "
+        "Set max_seen_ids to 0 to disable pruning.",
+        len(retained),
+        max_entries,
+    )
     return retained
+
+
+def persist_sync_state(
+    state_path: str,
+    *,
+    state: dict[str, Any],
+    imported_keys: set[str],
+    new_keys: list[str],
+    max_seen_ids: int,
+    db_path: str | None,
+    last_run: str,
+    last_import_count: int,
+    stats: dict[str, int] | None = None,
+) -> None:
+    """
+    Write sync_state only after a successful import (or empty successful fetch).
+    Merges DB-backed sf ids so a lost state file still converges on rerun.
+    """
+    merged = set(imported_keys) | set(new_keys)
+    if db_path:
+        # Bare SimpleFIN ids already in ezBookkeeping comments.
+        merged |= load_sf_ids_from_db(db_path)
+
+    state["imported_ids"] = sorted(prune_seen(merged, set(new_keys), max_seen_ids))
+    state["last_run"] = last_run
+    state["last_import_count"] = last_import_count
+    if stats is not None:
+        state["last_fetch_stats"] = stats
+    save_json(state_path, state)
 
 
 def list_accounts(access_url: str, timeout: int) -> None:
@@ -589,8 +703,16 @@ def run_sync(args: argparse.Namespace) -> int:
     setup_logging(error_log, verbose=args.verbose)
 
     state_path = config.get("state_file", DEFAULT_STATE_PATH)
+    if state_path and not os.path.isabs(state_path):
+        state_path = os.path.join(SCRIPT_DIR, state_path)
     state = load_json(state_path, default={"imported_ids": []})
-    seen = set(state.get("imported_ids") or [])
+    state_keys = set(state.get("imported_ids") or [])
+
+    db_path = config.get("ezbookkeeping_db")
+    if db_path and not os.path.isabs(db_path):
+        db_path = os.path.join(SCRIPT_DIR, db_path)
+    db_sf_ids = load_sf_ids_from_db(db_path) if db_path else set()
+    seen_keys, seen_sf_ids = build_seen_sets(state_keys, db_sf_ids)
 
     lookback_days = int(config.get("lookback_days", 7))
     overlap_days = int(config.get("overlap_days", 5))
@@ -604,6 +726,8 @@ def run_sync(args: argparse.Namespace) -> int:
     start = end - timedelta(days=window_days)
     timeout = int(config.get("request_timeout_seconds", 60))
     include_pending = bool(config.get("include_pending", False))
+    # 0 = unlimited; avoids randomly dropping ids and re-importing them.
+    max_seen_ids = int(config.get("max_seen_ids", 0))
 
     logging.info(
         "Fetching SimpleFIN transactions from %s to %s (%d days)",
@@ -624,7 +748,8 @@ def run_sync(args: argparse.Namespace) -> int:
     rows, new_keys, stats = build_csv_rows(
         accounts_payload=payload,
         account_map={str(k): str(v) for k, v in config["account_map"].items()},
-        seen=seen,
+        seen_keys=seen_keys,
+        seen_sf_ids=seen_sf_ids,
         default_expense_category=config.get("default_expense_category", "Uncategorized"),
         default_income_category=config.get("default_income_category", "Uncategorized"),
         default_expense_parent=config.get("default_expense_parent", ""),
@@ -634,13 +759,22 @@ def run_sync(args: argparse.Namespace) -> int:
         date_only_time=str(config.get("date_only_time", "00:00:00")),
         positive_is_income=bool(config.get("positive_is_income", False)),
     )
-    log_fetch_stats(stats, seen_count=len(seen))
+    log_fetch_stats(stats, seen_count=len(seen_keys) + len(seen_sf_ids))
 
     if not rows:
         logging.info("No new transactions to import.")
-        state["last_run"] = end.isoformat()
-        state["last_fetch_stats"] = stats
-        save_json(state_path, state)
+        # Still refresh state from DB so a wiped state file heals itself.
+        persist_sync_state(
+            state_path,
+            state=state,
+            imported_keys=seen_keys,
+            new_keys=[],
+            max_seen_ids=max_seen_ids,
+            db_path=db_path,
+            last_run=end.isoformat(),
+            last_import_count=0,
+            stats=stats,
+        )
         return 0
 
     logging.info("Prepared %d new transaction(s) for import", len(rows))
@@ -675,12 +809,18 @@ def run_sync(args: argparse.Namespace) -> int:
         if temp_dir is not None:
             temp_dir.cleanup()
 
-    max_entries = int(config.get("max_seen_ids", 5000))
-    seen.update(new_keys)
-    state["imported_ids"] = sorted(prune_seen(seen, set(new_keys), max_entries))
-    state["last_run"] = end.isoformat()
-    state["last_import_count"] = len(new_keys)
-    save_json(state_path, state)
+    # Only reached on successful import — keep state write tightly after CLI success.
+    persist_sync_state(
+        state_path,
+        state=state,
+        imported_keys=seen_keys,
+        new_keys=new_keys,
+        max_seen_ids=max_seen_ids,
+        db_path=db_path,
+        last_run=end.isoformat(),
+        last_import_count=len(new_keys),
+        stats=stats,
+    )
     logging.info("Import complete. Recorded %d txn id(s) in state.", len(new_keys))
     return 0
 

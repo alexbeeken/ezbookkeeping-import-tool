@@ -151,6 +151,8 @@ Run the job as the same OS user that can execute the ezBookkeeping CLI against y
 | `include_pending` | Include pending SimpleFIN transactions (default `true` in example; set `true` if card purchases never appear) |
 | `account_map` | SimpleFIN account id → ezBookkeeping account **name** |
 | `state_file` / `error_log` | Paths relative to the script directory if not absolute |
+| `ezbookkeeping_db` | Path to ezBookkeeping SQLite DB (example: `/path/to/ezbookkeeping/data/ezbookkeeping.db`); used to skip `[sf:…]` ids already imported |
+| `max_seen_ids` | Cap on `sync_state.json` ids; `0` = unlimited (recommended) |
 | `keep_csv_path` | If set, leave the generated CSV at this path |
 
 ## Notes

@@ -19,6 +19,7 @@
   },
   "state_file": "sync_state.json",
   "error_log": "bridge_error.log",
+  "ezbookkeeping_db": "/path/to/ezbookkeeping/data/ezbookkeeping.db",
   "keep_csv_path": null,
-  "max_seen_ids": 5000
+  "max_seen_ids": 0
 }
