@@ -154,21 +154,27 @@ def parse_access_url(access_url: str) -> tuple[str, str, str]:
 
 def fetch_accounts(
     access_url: str,
-    start_ts: int,
+    start_ts: int | None,
     end_ts: int | None,
     timeout: int,
     include_pending: bool,
+    *,
+    balances_only: bool = False,
 ) -> dict[str, Any]:
     requests = require_requests()
     base_url, username, password = parse_access_url(access_url)
-    params: dict[str, Any] = {
-        "version": "2",
-        "start-date": start_ts,
-    }
-    if end_ts is not None:
-        params["end-date"] = end_ts
-    if include_pending:
-        params["pending"] = "1"
+    params: dict[str, Any] = {"version": "2"}
+    if balances_only:
+        # Skip transaction history; still counts toward SimpleFIN /accounts quota.
+        params["balances-only"] = "1"
+    else:
+        if start_ts is None:
+            raise ValueError("start_ts is required unless balances_only=True")
+        params["start-date"] = start_ts
+        if end_ts is not None:
+            params["end-date"] = end_ts
+        if include_pending:
+            params["pending"] = "1"
 
     try:
         response = requests.get(

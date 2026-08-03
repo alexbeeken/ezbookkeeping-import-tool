@@ -114,16 +114,29 @@ python3 simplefin_sync.py
 
 ```bash
 chmod +x /path/to/ezbookkeeping-import/simplefin_sync.py
+chmod +x /path/to/ezbookkeeping-import/reconcile_balances.py
 crontab -e
 ```
 
-SimpleFIN asks clients to stay under ~24 `/accounts` requests per day and prefers off-the-hour minutes. Example: daily at 02:17:
+SimpleFIN asks clients to stay under ~24 `/accounts` requests per day and prefers off-the-hour minutes. Example: daily sync at 02:17, then balance reconcile at 02:27:
 
 ```cron
 17 2 * * * /usr/bin/python3 /path/to/ezbookkeeping-import/simplefin_sync.py >> /var/log/simplefin_sync.log 2>&1
+27 2 * * * /usr/bin/python3 /path/to/ezbookkeeping-import/reconcile_balances.py >> /var/log/simplefin_reconcile.log 2>&1
 ```
 
-Run the job as the same OS user that can execute the ezBookkeeping CLI against your data directory. If the CLI needs a specific cwd, set `ezbookkeeping_working_directory` in `config.json`.
+Each job is one `/accounts` request (reconcile uses `balances-only=1`). Run both as the same OS user that can execute the ezBookkeeping CLI against your data directory. If the CLI needs a specific cwd, set `ezbookkeeping_working_directory` in `config.json`.
+
+### Balance reconcile
+
+`reconcile_balances.py` compares each mapped account’s ezBookkeeping balance to SimpleFIN and imports one **Income** or **Expense** adjustment when they differ (same approach as the app’s Reconciliation UI — not Modify Balance).
+
+```bash
+python3 reconcile_balances.py --dry-run   # writes dry_run_reconcile.csv
+python3 reconcile_balances.py
+```
+
+Create leaf categories first (or reuse `Uncategorized`). Prefer a dedicated secondary like `Reconciliation` under `Misc` so reports can filter these rows, then set `reconcile_*_category` in config.
 
 ## How it works
 
@@ -151,9 +164,13 @@ Run the job as the same OS user that can execute the ezBookkeeping CLI against y
 | `include_pending` | Include pending SimpleFIN transactions (default `true` in example; set `true` if card purchases never appear) |
 | `account_map` | SimpleFIN account id → ezBookkeeping account **name** |
 | `state_file` / `error_log` | Paths relative to the script directory if not absolute |
-| `ezbookkeeping_db` | Path to ezBookkeeping SQLite DB (example: `/path/to/ezbookkeeping/data/ezbookkeeping.db`); used to skip `[sf:…]` ids already imported |
+| `ezbookkeeping_db` | Path to ezBookkeeping SQLite DB (example: `/path/to/ezbookkeeping/data/ezbookkeeping.db`); used for `[sf:…]` dedup and balance reconcile |
 | `max_seen_ids` | Cap on `sync_state.json` ids; `0` = unlimited (recommended) |
 | `keep_csv_path` | If set, leave the generated CSV at this path |
+| `reconcile_tolerance_cents` | Skip adjustments when \|delta\| ≤ this many cents (default `1`) |
+| `use_available_balance` | If `true`, prefer SimpleFIN `available-balance` when present |
+| `reconcile_expense_*` / `reconcile_income_*` | Parent/secondary category names for balance adjustments (fall back to `default_*`) |
+| `reconcile_accounts` | Optional list of SimpleFIN account ids to reconcile (default: all of `account_map`) |
 
 ## Notes
 
