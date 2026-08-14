@@ -23,6 +23,7 @@
   "keep_csv_path": null,
   "max_seen_ids": 0,
   "reconcile_tolerance_cents": 1,
+  "reconcile_max_adjust_cents": 500000,
   "use_available_balance": false,
   "reconcile_expense_parent": "Misc",
   "reconcile_expense_category": "Uncategorized",

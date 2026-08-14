@@ -143,11 +143,25 @@ def build_adjustment_rows(
             report.append(entry)
             continue
 
-        # SimpleFIN and ezBookkeeping use the same sign convention:
-        # assets positive, liabilities (owed) negative.
-        target_cents = dollars_to_cents(sf_bal)
+        # Sign conventions differ for liabilities:
+        #   SimpleFIN: negative = amount owed (bank / credit / mortgage)
+        #   ezBookkeeping: positive outstanding = amount owed (category 3/5)
+        sf_cents = dollars_to_cents(sf_bal)
+        is_liability = ez["category"] in LIABILITY_CATEGORIES
+        target_cents = -sf_cents if is_liability else sf_cents
         ez_cents = ez["balance_cents"]
         delta = target_cents - ez_cents
+
+        balance_date = sf.get("balance-date")
+        if balance_date:
+            try:
+                sf_asof = datetime.fromtimestamp(int(balance_date), tz=timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M UTC"
+                )
+            except (TypeError, ValueError, OSError):
+                sf_asof = str(balance_date)
+        else:
+            sf_asof = "unknown"
 
         entry.update(
             {
@@ -155,7 +169,8 @@ def build_adjustment_rows(
                 "ez_balance": sync.format_amount(cents_to_dollars(ez_cents)),
                 "target": sync.format_amount(cents_to_dollars(target_cents)),
                 "delta_cents": delta,
-                "is_liability": ez["category"] in LIABILITY_CATEGORIES,
+                "is_liability": is_liability,
+                "sf_balance_asof": sf_asof,
                 "currency": ez["currency"] or str(sf.get("currency") or ""),
             }
         )
@@ -174,7 +189,7 @@ def build_adjustment_rows(
 
         description = (
             f"[sf-reconcile] set balance to {entry['target']} "
-            f"(was {entry['ez_balance']}, SimpleFIN {entry['sf_balance']})"
+            f"(was {entry['ez_balance']}, SimpleFIN {entry['sf_balance']} as of {sf_asof})"
         )
         currency = entry["currency"]
         if isinstance(currency, str) and currency.startswith("http"):
@@ -218,14 +233,25 @@ def log_report(report: list[dict[str, Any]]) -> None:
     )
     for r in adjust:
         logging.info(
-            "  %s: %s %s → target %s (ez was %s, SF %s)",
+            "  %s: %s %s → target %s (ez was %s, SF %s, SF as of %s)",
             r["ez_name"],
             r["type"],
             r["amount"],
             r["target"],
             r["ez_balance"],
             r["sf_balance"],
+            r.get("sf_balance_asof", "?"),
         )
+    for r in report:
+        if r["action"] == "ok":
+            logging.info(
+                "  %s: ok target %s (ez %s, SF %s as of %s)",
+                r["ez_name"],
+                r.get("target"),
+                r.get("ez_balance"),
+                r.get("sf_balance"),
+                r.get("sf_balance_asof", "?"),
+            )
     for r in problems:
         logging.warning("  %s (%s): %s", r["ez_name"], r["sf_id"], r["action"])
 
@@ -243,6 +269,8 @@ def run_reconcile(args: argparse.Namespace) -> int:
 
     timeout = int(config.get("request_timeout_seconds", 60))
     tolerance = int(config.get("reconcile_tolerance_cents", 1))
+    # Block accidental mortgage-sized sign flips. 0 = unlimited.
+    max_adjust = int(config.get("reconcile_max_adjust_cents", 500_000))
     use_available = bool(config.get("use_available_balance", False))
 
     expense_parent = config.get(
@@ -297,6 +325,25 @@ def run_reconcile(args: argparse.Namespace) -> int:
         logging.info("No balance adjustments needed.")
         return 0
 
+    if max_adjust > 0 and not args.force:
+        oversized = [
+            r
+            for r in report
+            if r.get("action") == "adjust" and abs(int(r["delta_cents"])) > max_adjust
+        ]
+        if oversized:
+            for r in oversized:
+                logging.error(
+                    "Refusing %s adjustment of %s on %s "
+                    "(over reconcile_max_adjust_cents=%d). "
+                    "Likely liability sign mismatch or stale data. Use --force to override.",
+                    r["type"],
+                    r["amount"],
+                    r["ez_name"],
+                    max_adjust,
+                )
+            return 2
+
     keep_csv = config.get("reconcile_keep_csv_path") or config.get("keep_csv_path")
     temp_dir = None
     if keep_csv:
@@ -350,6 +397,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose",
         action="store_true",
         help="Enable debug logging.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow adjustments larger than reconcile_max_adjust_cents.",
     )
     return parser
 
