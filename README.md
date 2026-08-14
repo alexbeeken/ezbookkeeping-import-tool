@@ -131,12 +131,14 @@ Each job is one `/accounts` request (reconcile uses `balances-only=1`). Run both
 
 `reconcile_balances.py` compares each mapped account’s ezBookkeeping balance to SimpleFIN and imports one **Income** or **Expense** adjustment when they differ (same approach as the app’s Reconciliation UI — not Modify Balance).
 
+Liability accounts (credit card / debt) negate SimpleFIN’s balance before comparing: SimpleFIN usually reports amount-owed as negative, while ezBookkeeping stores outstanding as positive.
+
 ```bash
 python3 reconcile_balances.py --dry-run   # writes dry_run_reconcile.csv
 python3 reconcile_balances.py
 ```
 
-Create leaf categories first (or reuse `Uncategorized`). Prefer a dedicated secondary like `Reconciliation` under `Misc` so reports can filter these rows, then set `reconcile_*_category` in config.
+Create leaf categories first (or reuse `Uncategorized`). Prefer a dedicated secondary like `Reconciliation` under `Misc` so reports can filter these rows, then set `reconcile_*_category` in config. Adjustments larger than `reconcile_max_adjust_cents` (default $5,000) are refused unless you pass `--force`.
 
 ## How it works
 
@@ -168,6 +170,7 @@ Create leaf categories first (or reuse `Uncategorized`). Prefer a dedicated seco
 | `max_seen_ids` | Cap on `sync_state.json` ids; `0` = unlimited (recommended) |
 | `keep_csv_path` | If set, leave the generated CSV at this path |
 | `reconcile_tolerance_cents` | Skip adjustments when \|delta\| ≤ this many cents (default `1`) |
+| `reconcile_max_adjust_cents` | Refuse a single adjustment larger than this many cents (default `500000` = $5,000). `0` disables. Use `--force` to override |
 | `use_available_balance` | If `true`, prefer SimpleFIN `available-balance` when present |
 | `reconcile_expense_*` / `reconcile_income_*` | Parent/secondary category names for balance adjustments (fall back to `default_*`) |
 | `reconcile_accounts` | Optional list of SimpleFIN account ids to reconcile (default: all of `account_map`) |

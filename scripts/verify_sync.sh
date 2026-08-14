@@ -1,15 +1,21 @@
 #!/bin/bash
-# Run on the Pi (or via: zsh -ic 'pi "bash -s"' < scripts/verify_sync.sh)
+# Verify sync/reconcile health on the host that runs the import tool.
+#
+# Example:
+#   TOOL_DIR=/path/to/ezbookkeeping-import-tool \
+#   EZ_DB=/path/to/ezbookkeeping/data/ezbookkeeping.db \
+#   ./scripts/verify_sync.sh
 set -euo pipefail
-TOOL="${TOOL_DIR:-/mnt/MEDIA/ezbookkeeping-import-tool}"
-DB="${EZ_DB:-/mnt/MEDIA/ezbookkeeping/data/ezbookkeeping.db}"
+
+TOOL="${TOOL_DIR:?Set TOOL_DIR to the import tool directory}"
+DB="${EZ_DB:?Set EZ_DB to the ezBookkeeping SQLite DB path}"
 
 echo "=== cron ==="
 crontab -l 2>/dev/null | grep -E 'simplefin|reconcile' || echo "(no sync/reconcile cron entries)"
 
 echo
 echo "=== last log lines ==="
-for f in /var/log/simplefin_sync.log /var/log/simplefin_reconcile.log "$TOOL/bridge_error.log"; do
+for f in /var/log/simplefin_sync.log /var/log/simplefin_reconcile.log /var/log/reconcile_balances.log "$TOOL/bridge_error.log"; do
   if [[ -f "$f" ]]; then
     echo "--- $f (tail) ---"
     tail -5 "$f"
